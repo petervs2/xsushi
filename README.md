@@ -54,11 +54,14 @@ git clone https://github.com/petervs2/xsushi
 cd xsushi
 
 Set up .env in config/ (add to your existing DATABASE_URL):
+
 DATABASE_URL=your existing DATABASE_URL
+
 BOT_TOKEN=your_bot_token_here
 
 Build and run with Docker Compose:
-textdocker compose up --build -d
+
+docker compose up --build -d
 
 Access the app at http://localhost:8001 (or your domain).
 
