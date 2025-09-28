@@ -1,0 +1,23 @@
+services:
+  xsushi_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xsushi_app
+    env_file:
+      - config/.env
+    networks:
+      - pool_info_app-network
+    ports:
+      - "127.0.0.1:8001:8001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/ratio-data"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  pool_info_app-network:
+    external: true

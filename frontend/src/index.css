@@ -1,0 +1,60 @@
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0f172a;
+  color: #e2e8f0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* Убираем фокус-рамку для Recharts */
+.recharts-wrapper,
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible,
+.recharts-wrapper:focus-within,
+.recharts-wrapper svg,
+.recharts-wrapper .recharts-surface,
+.recharts-wrapper [tabindex]:focus {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Hover для ссылки */
+a:hover {
+  text-decoration: underline;
+}
+
+/* Только для клавиатурной навигации (доступность) */
+.recharts-wrapper:focus-visible svg,
+.recharts-wrapper:focus-visible .recharts-surface {
+  outline: 2px solid #00d4ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  div[style*="padding"] {
+    padding: 10px 5px;
+  }
+  
+  h1 {
+    font-size: 20px;
+  }
+  
+  .recharts-responsive-container {
+    height: 500px !important;
+  }
+  
+  .recharts-x-axis-ticks text {
+    font-size: 8px !important;
+  }
+  
+  a[style*="margin: '10px 0 0 0'"] {
+    margin-left: 5px;
+    font-size: 16px;
+  }
+}
