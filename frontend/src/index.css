@@ -11,7 +11,6 @@ body {
   box-sizing: border-box;
 }
 
-/* Убираем фокус-рамку для Recharts */
 .recharts-wrapper,
 .recharts-wrapper:focus,
 .recharts-wrapper:focus-visible,
@@ -24,12 +23,10 @@ body {
   border: none !important;
 }
 
-/* Hover для ссылки */
 a:hover {
   text-decoration: underline;
 }
 
-/* Только для клавиатурной навигации (доступность) */
 .recharts-wrapper:focus-visible svg,
 .recharts-wrapper:focus-visible .recharts-surface {
   outline: 2px solid #00d4ff;
