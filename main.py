@@ -54,33 +54,48 @@ async def fetch_ratio() -> Optional[Decimal]:
         logger.error(f"Fetch error: {str(e)}")
         return None
 
-# Check for new ratio and save if changed; send notifications if updated
+# Check for new ratio and save if changed; send notifications if updated (one record per day)
 async def check_and_save():
     new_ratio = await fetch_ratio()
     if new_ratio is None:
         return
 
     async for session in get_session():
-        # Get last two records to calculate change
-        result = await session.execute(text("SELECT ratio, timestamp FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
-        rows = result.fetchall()
-        last_ratio = Decimal(str(rows[0][0])) if rows else None
-        prev_ratio = Decimal(str(rows[1][0])) if len(rows) > 1 else None
-        last_timestamp = rows[0][1] if rows else None
+        # Get today's last record to check for change
+        today = datetime.now(timezone.utc).date()
+        result = await session.execute(
+            text("SELECT ratio, timestamp FROM xsushi WHERE date(timestamp) = :today ORDER BY timestamp DESC LIMIT 1"),
+            {"today": today}
+        )
+        today_row = result.fetchone()
+        today_ratio = Decimal(str(today_row[0])) if today_row else None
         
-        if last_ratio is None or abs(new_ratio - last_ratio) >= Decimal('0.0001'):
-            await session.execute(
-                text("INSERT INTO xsushi (timestamp, ratio) VALUES (NOW(), :ratio)"),
-                {"ratio": new_ratio}
-            )
-            await session.commit()
-            logger.info(f"Saved new ratio: {new_ratio} (last: {last_ratio})")
+        if today_ratio is None or abs(new_ratio - today_ratio) >= Decimal('0.0001'):
+            if today_ratio is not None:
+                # Update existing record for today
+                await session.execute(
+                    text("UPDATE xsushi SET ratio = :ratio, timestamp = NOW() WHERE date(timestamp) = :today"),
+                    {"ratio": new_ratio, "today": today}
+                )
+                logger.info(f"Updated today's ratio: {new_ratio}")
+            else:
+                # Insert new record for today
+                await session.execute(
+                    text("INSERT INTO xsushi (timestamp, ratio) VALUES (NOW(), :ratio)"),
+                    {"ratio": new_ratio}
+                )
+                logger.info(f"Inserted new ratio for today: {new_ratio}")
             
-            # Prepare notification message
+            await session.commit()
+            
+            # Prepare notification message (change % from previous record, even if different day)
+            prev_result = await session.execute(text("SELECT ratio FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
+            prev_rows = prev_result.fetchall()
+            prev_ratio = Decimal(str(prev_rows[1][0])) if len(prev_rows) > 1 else new_ratio
+            change_percent = abs((new_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01'))
+            last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
             xsushi_sushi = (1 / new_ratio).quantize(Decimal('0.0001'))
             sushi_xsushi = new_ratio
-            change_percent = abs((new_ratio - last_ratio) / last_ratio * 100).quantize(Decimal('0.01')) if last_ratio else Decimal('0.00')
-            last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
             message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nTo unsubscribe, use /stop"
             
             # Get subscribers and send notifications
@@ -93,7 +108,7 @@ async def check_and_save():
                 except Exception as e:
                     logger.error(f"Failed to send to {user_id}: {e}")
         else:
-            logger.info(f"Ratio unchanged, skipped: {new_ratio} (last: {last_ratio})")
+            logger.info(f"Ratio unchanged for today, skipped: {new_ratio} (today: {today_ratio})")
 
 # Scheduler instance for periodic tasks
 scheduler = AsyncIOScheduler()
@@ -121,10 +136,10 @@ async def get_ratio_data(
 ):
     query = "SELECT timestamp, ratio FROM xsushi WHERE 1=1"
     params = {}
-    if from_date:
+    if isinstance(from_date, str) and from_date:
         query += " AND timestamp >= :from_date"
         params['from_date'] = datetime.fromisoformat(f"{from_date}T00:00:00+00:00")
-    if to_date:
+    if isinstance(to_date, str) and to_date:
         query += " AND timestamp <= :to_date"
         params['to_date'] = datetime.fromisoformat(f"{to_date}T23:59:59+00:00")
     query += " ORDER BY timestamp ASC"
