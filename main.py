@@ -4,8 +4,9 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.sql import text
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,6 +16,7 @@ from typing import List, Optional
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
+from playwright.async_api import async_playwright
 
 # Basic logging setup
 logging.basicConfig(level=logging.INFO)
@@ -61,18 +63,22 @@ async def check_and_save():
         return
 
     async for session in get_session():
-        # Get today's last record to check for change
-        today = datetime.now(timezone.utc).date()
-        result = await session.execute(
-            text("SELECT ratio, timestamp FROM xsushi WHERE date(timestamp) = :today ORDER BY timestamp DESC LIMIT 1"),
-            {"today": today}
-        )
-        today_row = result.fetchone()
-        today_ratio = Decimal(str(today_row[0])) if today_row else None
+        # Get overall last record to check for any change
+        result = await session.execute(text("SELECT ratio, timestamp FROM xsushi ORDER BY timestamp DESC LIMIT 1"))
+        last_row = result.fetchone()
+        last_ratio = Decimal(str(last_row[0])) if last_row else None
         
-        if today_ratio is None or abs(new_ratio - today_ratio) >= Decimal('0.0001'):
-            if today_ratio is not None:
-                # Update existing record for today
+        if last_ratio is None or abs(new_ratio - last_ratio) >= Decimal('0.0001'):
+            # Check if there's a record for today
+            today = datetime.now(timezone.utc).date()
+            today_result = await session.execute(
+                text("SELECT id FROM xsushi WHERE date(timestamp) = :today"),
+                {"today": today}
+            )
+            today_exists = today_result.fetchone() is not None
+            
+            if today_exists:
+                # Update today's record
                 await session.execute(
                     text("UPDATE xsushi SET ratio = :ratio, timestamp = NOW() WHERE date(timestamp) = :today"),
                     {"ratio": new_ratio, "today": today}
@@ -88,7 +94,7 @@ async def check_and_save():
             
             await session.commit()
             
-            # Prepare notification message (change % from previous record, even if different day)
+            # Prepare notification message (change % from previous overall record)
             prev_result = await session.execute(text("SELECT ratio FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
             prev_rows = prev_result.fetchall()
             prev_ratio = Decimal(str(prev_rows[1][0])) if len(prev_rows) > 1 else new_ratio
@@ -108,7 +114,7 @@ async def check_and_save():
                 except Exception as e:
                     logger.error(f"Failed to send to {user_id}: {e}")
         else:
-            logger.info(f"Ratio unchanged for today, skipped: {new_ratio} (today: {today_ratio})")
+            logger.info(f"Ratio unchanged overall, skipped: {new_ratio} (last: {last_ratio})")
 
 # Scheduler instance for periodic tasks
 scheduler = AsyncIOScheduler()
@@ -170,9 +176,30 @@ Allow: /static/
 Disallow: /api/
 """, media_type="text/plain")
 
-# Root endpoint for React app
-@app.get("/")
-async def root():
+# Root endpoint for React app with SSR for bots using Playwright
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    user_agent = request.headers.get("user-agent", "").lower()
+    bots = [
+        "googlebot", "bingbot", "slurp", "duckduckbot", "baiduspider", "yandexbot", "yandeximagesearch",
+        "applebot", "facebookexternalhit", "twitterbot", "linkedinbot", "pinterestbot", "whatsapp",
+        "gptbot", "perplexitybot", "anthropic-ai", "claudebot", "grokaibot", "xai-retriever",
+        "ahrefsbot", "semrushbot", "majestic-12", "mj12bot", "screaming frog", "sitebulb",
+        "bytespider", "coccocbot", "exabot", "nutch", "sogou", "360spider"
+    ]
+    if any(bot in user_agent for bot in bots) or "bot" in user_agent:
+        # Fetch data server-side for injection
+        data = await get_ratio_data()
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(f"http://localhost:8001/static/index.html")
+            await page.wait_for_load_state("networkidle")
+            # Inject data as global for React hydration
+            await page.evaluate(f"window.__INITIAL_DATA__ = {json.dumps(data)}")
+            html = await page.content()
+            await browser.close()
+            return HTMLResponse(content=html)
     return FileResponse("static/index.html")
 
 # Telegram bot setup
