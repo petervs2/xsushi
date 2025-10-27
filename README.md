@@ -3,6 +3,7 @@ xSushi Ratio Tracker
 A simple web app to track the xSUSHI/SUSHI staking ratio on SushiSwap over time. It includes an interactive chart with switchable views (xSushi/Sushi or Sushi/xSushi), current value display, and a Telegram bot for instant notifications on ratio changes.
 
 Live demo: https://xsushi.mywire.org
+
 Telegram bot for alerts: @xsushi_ratio_changes_bot
 
 Features
