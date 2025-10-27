@@ -57,7 +57,7 @@ async def fetch_ratio() -> Optional[Decimal]:
         return None
 
 # Check for new ratio and save if changed; send notifications if updated (one record per day)
-async def check_and_save():
+async def check_and_save(to_check_only: bool = False):
     new_ratio = await fetch_ratio()
     if new_ratio is None:
         return
@@ -94,25 +94,25 @@ async def check_and_save():
             
             await session.commit()
             
-            # Prepare notification message (change % from previous overall record)
-            prev_result = await session.execute(text("SELECT ratio FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
-            prev_rows = prev_result.fetchall()
-            prev_ratio = Decimal(str(prev_rows[1][0])) if len(prev_rows) > 1 else new_ratio
-            change_percent = abs((new_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01'))
-            last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
-            xsushi_sushi = (1 / new_ratio).quantize(Decimal('0.0001'))
-            sushi_xsushi = new_ratio
-            message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nTo unsubscribe, use /stop"
-            
-            # Get subscribers and send notifications
-            sub_result = await session.execute(text("SELECT user_id FROM subscribers"))
-            subscribers = [row[0] for row in sub_result.fetchall()]
-            for user_id in subscribers:
-                try:
-                    await bot.send_message(chat_id=user_id, text=message)
-                    await asyncio.sleep(1)  # Pause to respect Telegram rate limits
-                except Exception as e:
-                    logger.error(f"Failed to send to {user_id}: {e}")
+            if not to_check_only:
+                # Prepare notification message (change % from previous overall record)
+                prev_result = await session.execute(text("SELECT ratio FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
+                prev_rows = prev_result.fetchall()
+                prev_ratio = Decimal(str(prev_rows[1][0])) if len(prev_rows) > 1 else new_ratio
+                change_percent = abs((new_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01'))
+                last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+                xsushi_sushi = (1 / new_ratio).quantize(Decimal('0.0001'))
+                sushi_xsushi = new_ratio
+                message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"                
+                # Get subscribers and send notifications
+                sub_result = await session.execute(text("SELECT user_id FROM subscribers"))
+                subscribers = [row[0] for row in sub_result.fetchall()]
+                for user_id in subscribers:
+                    try:
+                        await bot.send_message(chat_id=user_id, text=message)
+                        await asyncio.sleep(1)  # Pause to respect Telegram rate limits
+                    except Exception as e:
+                        logger.error(f"Failed to send to {user_id}: {e}")
         else:
             logger.info(f"Ratio unchanged overall, skipped: {new_ratio} (last: {last_ratio})")
 
@@ -124,7 +124,7 @@ scheduler = AsyncIOScheduler()
 async def startup_event():
     scheduler.add_job(check_and_save, 'cron', hour='*', minute=0, id='hourly_check', replace_existing=True)
     scheduler.start()
-    await check_and_save()  # Initial check
+    await check_and_save(to_check_only=True)  # Initial check without notifications
     logger.info("Scheduler started")
     asyncio.create_task(start_bot())  # Start bot polling in background
 
@@ -173,7 +173,6 @@ async def robots_txt():
 User-agent: *
 Allow: /
 Allow: /static/
-Disallow: /api/
 """, media_type="text/plain")
 
 # Root endpoint for React app with SSR for bots using Playwright
@@ -237,10 +236,10 @@ async def start_handler(message: types.Message):
             change_percent = abs((last_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01')) if len(rows) > 1 else Decimal('0.00')
             date_str = datetime.utcnow().date().isoformat()
             last_change_date_str = last_timestamp.strftime('%Y-%m-%d %H:%M')
-            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nTo unsubscribe, use /stop"
+            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop" 
             await bot.send_message(chat_id=user_id, text=welcome_msg)
         else:
-            await bot.send_message(chat_id=user_id, text="Welcome! No data yet, check back soon.\n\nTo unsubscribe, use /stop")
+            await bot.send_message(chat_id=user_id, text="Welcome! No data yet, check back soon.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop")
 
 # Bot command: /stop - unsubscribe user
 @dp.message(Command("stop"))
@@ -250,7 +249,7 @@ async def stop_handler(message: types.Message):
         await session.execute(text("DELETE FROM subscribers WHERE user_id = :user_id"), {"user_id": user_id})
         await session.commit()
     
-    await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates. Use /start to subscribe again.")
+        await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nUse /start to subscribe again.")
 
 # Start bot polling in background
 async def start_bot():
