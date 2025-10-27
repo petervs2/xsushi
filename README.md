@@ -4,7 +4,7 @@ A simple web app to track the xSUSHI/SUSHI staking ratio on SushiSwap over time.
 
 Live demo: https://xsushi.mywire.org
 
-Telegram bot for alerts: @xsushi_ratio_changes_bot
+Telegram bot for alerts: [@xsushi_ratio_changes_bot](https://t.me/xsushi_ratio_changes_bot)
 
 Features
 
