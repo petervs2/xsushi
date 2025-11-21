@@ -4,14 +4,15 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: xsushi_app
+    init: true
     env_file:
       - config/.env
     networks:
-      - xsushi_app-network
+      - pool_info_app-network
     ports:
       - "127.0.0.1:8001:8001"
     restart: unless-stopped
 
 networks:
-  xsushi_app-network:
+  pool_info_app-network:
     external: true
