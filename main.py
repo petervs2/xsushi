@@ -17,6 +17,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from playwright.async_api import async_playwright
+from cachetools import TTLCache
 
 # Basic logging setup
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,54 @@ async def get_session() -> AsyncSession:
     async with AsyncSession(engine) as session:
         yield session
 
+balance_cache = TTLCache(maxsize=1, ttl=30)
+
+async def get_treasury_balance_usd() -> dict:  
+    if "data" in balance_cache:
+        return balance_cache["data"]
+
+    key = os.getenv("ETHPLORER_KEY", "freekey")
+    url = f"https://api.ethplorer.io/getAddressInfo/0x5ad6211CD3fdE39A9cECB5df6f380b8263d1e277?apiKey={key}"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=15.0)
+            resp.raise_for_status()
+            data = resp.json()
+
+            total_usd = Decimal('0')
+            weth_balance = Decimal('0')
+
+            for token in data.get("tokens", []):
+                token_info = token.get("tokenInfo", {})
+                symbol = token_info.get("symbol", "")
+                price_info = token_info.get("price")
+
+                balance_raw = Decimal(token["balance"]) / Decimal(10) ** int(token_info.get("decimals", 18))
+
+                if symbol == "WETH":
+                    weth_balance = balance_raw.quantize(Decimal('0.0001'))
+
+                if price_info and "rate" in price_info:
+                    price = Decimal(price_info["rate"])
+                    total_usd += balance_raw * price
+
+            total_usd = total_usd.quantize(Decimal('0.01'))
+
+            result = {
+                "balance_usd": float(total_usd),
+                "weth_balance": float(weth_balance)
+            }
+
+            balance_cache["data"] = result
+            logger.info(f"Treasury: ${total_usd} | WETH: {weth_balance}")
+            return result
+
+    except Exception as e:
+        logger.error(f"Ethplorer error: {e}")
+        return {"balance_usd": 0.0, "weth_balance": 0.0}
+
+    
 # Fetch current xSushiSushiRatio from SushiSwap GraphQL API
 async def fetch_ratio() -> Optional[Decimal]:
     url = 'https://production.data-gcp.sushi.com/graphql'
@@ -103,7 +152,8 @@ async def check_and_save(to_check_only: bool = False):
                 last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
                 xsushi_sushi = (1 / new_ratio).quantize(Decimal('0.0001'))
                 sushi_xsushi = new_ratio
-                message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"                
+                message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
+                
                 # Get subscribers and send notifications
                 sub_result = await session.execute(text("SELECT user_id FROM subscribers"))
                 subscribers = [row[0] for row in sub_result.fetchall()]
@@ -158,6 +208,11 @@ async def get_ratio_data(
             for row in rows
         ]
 
+@app.get("/api/balance")
+async def api_balance():
+    data = await get_treasury_balance_usd()
+    return data
+    
 # Serve static React files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -236,7 +291,7 @@ async def start_handler(message: types.Message):
             change_percent = abs((last_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01')) if len(rows) > 1 else Decimal('0.00')
             date_str = datetime.utcnow().date().isoformat()
             last_change_date_str = last_timestamp.strftime('%Y-%m-%d %H:%M')
-            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop" 
+            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
             await bot.send_message(chat_id=user_id, text=welcome_msg)
         else:
             await bot.send_message(chat_id=user_id, text="Welcome! No data yet, check back soon.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop")
@@ -249,7 +304,7 @@ async def stop_handler(message: types.Message):
         await session.execute(text("DELETE FROM subscribers WHERE user_id = :user_id"), {"user_id": user_id})
         await session.commit()
     
-        await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nUse /start to subscribe again.")
+    await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nUse /start to subscribe again.")
 
 # Start bot polling in background
 async def start_bot():
