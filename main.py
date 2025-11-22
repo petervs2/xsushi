@@ -16,7 +16,6 @@ from typing import List, Optional
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from playwright.async_api import async_playwright
 from cachetools import TTLCache
 
 # Basic logging setup
@@ -26,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Get DATABASE_URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
+    # Fallback for local testing if needed, or raise error
     raise ValueError("DATABASE_URL not set")
 
 # FastAPI application instance
@@ -145,22 +145,25 @@ async def check_and_save(to_check_only: bool = False):
             
             if not to_check_only:
                 # Prepare notification message (change % from previous overall record)
+                balance_data = await get_treasury_balance_usd()
+                total_usd = balance_data["balance_usd"]
+                weth_balance = balance_data["weth_balance"]
                 prev_result = await session.execute(text("SELECT ratio FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
                 prev_rows = prev_result.fetchall()
                 prev_ratio = Decimal(str(prev_rows[1][0])) if len(prev_rows) > 1 else new_ratio
                 change_percent = abs((new_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01'))
-                last_change_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+                last_change_date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')
                 xsushi_sushi = (1 / new_ratio).quantize(Decimal('0.0001'))
                 sushi_xsushi = new_ratio
-                message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
+                message = f"Reward distributed!\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nRemaining fees to be distributed:\n~${total_usd:,.0f} ({weth_balance:.2f} WETH)\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
                 
                 # Get subscribers and send notifications
                 sub_result = await session.execute(text("SELECT user_id FROM subscribers"))
                 subscribers = [row[0] for row in sub_result.fetchall()]
                 for user_id in subscribers:
                     try:
-                        await bot.send_message(chat_id=user_id, text=message)
-                        await asyncio.sleep(1)  # Pause to respect Telegram rate limits
+                        await bot.send_message(chat_id=user_id, text=message, disable_web_page_preview=True)
+                        await asyncio.sleep(0.05)  # Small pause
                     except Exception as e:
                         logger.error(f"Failed to send to {user_id}: {e}")
         else:
@@ -182,14 +185,11 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     scheduler.shutdown()
-    await dp.stop_polling()
+    if dp:
+        await dp.stop_polling()
 
-# API endpoint for frontend data
-@app.get("/api/ratio-data")
-async def get_ratio_data(
-    from_date: Optional[str] = Query(None),
-    to_date: Optional[str] = Query(None)
-):
+# Helper function to get historical data
+async def fetch_historical_data(from_date: Optional[str] = None, to_date: Optional[str] = None):
     query = "SELECT timestamp, ratio FROM xsushi WHERE 1=1"
     params = {}
     if isinstance(from_date, str) and from_date:
@@ -207,6 +207,14 @@ async def get_ratio_data(
             {"timestamp": row[0].isoformat(), "ratio": float(row[1])}
             for row in rows
         ]
+
+# API endpoint for frontend data
+@app.get("/api/ratio-data")
+async def get_ratio_data(
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None)
+):
+    return await fetch_historical_data(from_date, to_date)
 
 @app.get("/api/balance")
 async def api_balance():
@@ -230,30 +238,65 @@ Allow: /
 Allow: /static/
 """, media_type="text/plain")
 
-# Root endpoint for React app with SSR for bots using Playwright
+# Root endpoint for React app with SSR replacement logic
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     user_agent = request.headers.get("user-agent", "").lower()
+    # List of common bots
     bots = [
-        "googlebot", "bingbot", "slurp", "duckduckbot", "baiduspider", "yandexbot", "yandeximagesearch",
-        "applebot", "facebookexternalhit", "twitterbot", "linkedinbot", "pinterestbot", "whatsapp",
-        "gptbot", "perplexitybot", "anthropic-ai", "claudebot", "grokaibot", "xai-retriever",
-        "ahrefsbot", "semrushbot", "majestic-12", "mj12bot", "screaming frog", "sitebulb",
-        "bytespider", "coccocbot", "exabot", "nutch", "sogou", "360spider"
+        "googlebot", "bingbot", "slurp", "duckduckbot", "baiduspider", "yandexbot", 
+        "telegrambot", "twitterbot", "linkedinbot", "whatsapp", "facebookexternalhit",
+        "discordbot", "slackbot"
     ]
-    if any(bot in user_agent for bot in bots) or "bot" in user_agent:
-        # Fetch data server-side for injection
-        data = await get_ratio_data()
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(f"http://localhost:8001/static/index.html")
-            await page.wait_for_load_state("networkidle")
-            # Inject data as global for React hydration
-            await page.evaluate(f"window.__INITIAL_DATA__ = {json.dumps(data)}")
-            html = await page.content()
-            await browser.close()
-            return HTMLResponse(content=html)
+    
+    is_bot = any(bot in user_agent for bot in bots) or "bot" in user_agent
+
+    if is_bot:
+        # 1. Get Fresh Data
+        ratio_data = await fetch_historical_data()
+        balance_data = await get_treasury_balance_usd()
+        
+        # Get latest values for Meta Tags
+        last_ratio = ratio_data[-1]['ratio'] if ratio_data else 0
+        balance_usd = balance_data.get('balance_usd', 0)
+        
+        # Prepare JSON for Hydration
+        full_initial_data = {
+            "ratioData": ratio_data,
+            "balanceData": balance_data
+        }
+        json_data = json.dumps(full_initial_data)
+
+        try:
+            with open("static/index.html", "r", encoding="utf-8") as f:
+                html_content = f.read()
+            
+            # 2. Inject JSON Data (Server Side Injection)
+            # Inserts <script> before </body>
+            script_injection = f'<script>window.__INITIAL_DATA__ = {json_data};</script>'
+            
+            # 3. Update SEO Meta Tags
+            seo_title = f"Sushi Ratio: {last_ratio:.4f} | Treasury: ${balance_usd:,.0f}"
+            seo_desc = f"Current xSushi/Sushi ratio is {last_ratio:.4f}. Fees awaiting distribution: ${balance_usd:,.0f}."
+            
+            # Replace Title
+            html_content = html_content.replace("<title>xSushi Ratio</title>", f"<title>{seo_title}</title>")
+            
+            # Replace Description (ensure the string matches EXACTLY what is in your index.html)
+            original_desc = 'content="Track the xSUSHI/SUSHI staking ratio on SushiSwap over time. Monitor DeFi yields and staking metrics."'
+            html_content = html_content.replace(original_desc, f'content="{seo_desc}"')
+
+            # Inject Script
+            final_html = html_content.replace("</body>", f"{script_injection}</body>")
+            
+            return HTMLResponse(content=final_html)
+            
+        except Exception as e:
+            logger.error(f"Error injecting data: {e}")
+            # Fallback to standard file if injection fails
+            return FileResponse("static/index.html")
+
+    # For normal users
     return FileResponse("static/index.html")
 
 # Telegram bot setup
@@ -282,6 +325,9 @@ async def start_handler(message: types.Message):
     async for session in get_session():
         result = await session.execute(text("SELECT ratio, timestamp FROM xsushi ORDER BY timestamp DESC LIMIT 2"))
         rows = result.fetchall()
+        balance_data = await get_treasury_balance_usd()
+        total_usd = balance_data["balance_usd"]
+        weth_balance = balance_data["weth_balance"]
         if rows:
             last_ratio = Decimal(str(rows[0][0]))
             prev_ratio = Decimal(str(rows[1][0])) if len(rows) > 1 else last_ratio
@@ -289,12 +335,12 @@ async def start_handler(message: types.Message):
             xsushi_sushi = (1 / last_ratio).quantize(Decimal('0.0001'))
             sushi_xsushi = last_ratio
             change_percent = abs((last_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01')) if len(rows) > 1 else Decimal('0.00')
-            date_str = datetime.utcnow().date().isoformat()
+            date_str = datetime.now(timezone.utc).date().isoformat()
             last_change_date_str = last_timestamp.strftime('%Y-%m-%d %H:%M')
-            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
-            await bot.send_message(chat_id=user_id, text=welcome_msg)
+            welcome_msg = f"Welcome! You're subscribed to xSushi ratio updates.\n\nDate: {date_str}\nxSushi/Sushi = {xsushi_sushi}\nSushi/xSushi = {sushi_xsushi}\nLast change date: {last_change_date_str}\nLast change: {change_percent}%\n\nFees awaiting distribution:\n~${total_usd:,.0f} ({weth_balance:.2f} WETH)\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop"
+            await bot.send_message(chat_id=user_id, text=welcome_msg, disable_web_page_preview=True)
         else:
-            await bot.send_message(chat_id=user_id, text="Welcome! No data yet, check back soon.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop")
+            await bot.send_message(chat_id=user_id, text="Welcome! No data yet, check back soon.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nTo unsubscribe, use /stop", disable_web_page_preview=True)
 
 # Bot command: /stop - unsubscribe user
 @dp.message(Command("stop"))
@@ -304,7 +350,7 @@ async def stop_handler(message: types.Message):
         await session.execute(text("DELETE FROM subscribers WHERE user_id = :user_id"), {"user_id": user_id})
         await session.commit()
     
-    await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nUse /start to subscribe again.")
+    await bot.send_message(chat_id=user_id, text="You've unsubscribed from xSushi ratio updates.\n\nView the chart:\nhttps://xsushi.mywire.org\n\nUse /start to subscribe again.", disable_web_page_preview=True)
 
 # Start bot polling in background
 async def start_bot():
