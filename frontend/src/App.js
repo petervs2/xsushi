@@ -2,32 +2,62 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush } from 'recharts';
 import { format, parseISO } from 'date-fns';
 
+// We'll move the data processing logic into a separate function,
+// so it can be used during both loading and SSR
+const processRawData = (rawData) => {
+  if (!rawData) return [];
+  return rawData.map((point, index) => ({
+    ...point,
+    originalRatio: point.ratio,
+    deltaPercent: index > 0 
+      ? ((point.ratio - rawData[index - 1].ratio) / rawData[index - 1].ratio * 100).toFixed(2) 
+      : null
+  }));
+};
+
 function App() {
-  const [data, setData] = useState([]);
-  const [balanceUsd, setBalanceUsd] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // 1. Check if there is data from the server (SSR)
+  const initialData = window.__INITIAL_DATA__;
+
+  // 2. Initialize the state. If there is initialData, we immediately process it with the processRawData function.
+  const [data, setData] = useState(() => 
+    initialData ? processRawData(initialData.ratioData) : []
+  );
+  
+  const [balanceUsd, setBalanceUsd] = useState(
+    initialData ? initialData.balanceData.balance_usd : null
+  );
+  
+  const [wethBalance, setWethBalance] = useState(
+    initialData ? initialData.balanceData.weth_balance : null
+  );
+
+  // If the data already exists, loading = false
+  const [loading, setLoading] = useState(!initialData);
   const [error, setError] = useState(null);
   const [selectedRatioType, setSelectedRatioType] = useState('xsushi_sushi');
-  const [wethBalance, setWethBalance] = useState(null);
 
   useEffect(() => {
+    // If the data has already been embedded by the server, we do not make a request
+    if (initialData) {
+      return;
+    }
+
+    // Otherwise (for regular users) we make a request
     Promise.all([
       fetch('/api/ratio-data').then(r => r.json()),
       fetch('/api/balance').then(r => r.json())
     ])
       .then(([rawData, balanceData]) => {
-        const processedData = rawData.map((point, index) => ({
-          ...point,
-          originalRatio: point.ratio,
-          deltaPercent: index > 0 ? ((point.ratio - rawData[index - 1].ratio) / rawData[index - 1].ratio * 100).toFixed(2) : null
-        }));
-        setData(processedData);
+        // Use the same processing function
+        const processed = processRawData(rawData);
+        setData(processed);
         setBalanceUsd(balanceData.balance_usd);
         setWethBalance(balanceData.weth_balance);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const processedGraphData = useMemo(() => {
     return data.map((point, index) => {
@@ -74,15 +104,21 @@ function App() {
 
   const ratios = processedGraphData.map(d => d.ratio);
   let minRatio, maxRatio;
-  if (selectedRatioType === 'sushi_xsushi') {
-    minRatio = Math.min(...ratios) - 0.005;
-    maxRatio = 0.65;
+  
+  if (ratios.length > 0) {
+      if (selectedRatioType === 'sushi_xsushi') {
+        minRatio = Math.min(...ratios) - 0.005;
+        maxRatio = 0.65; 
+      } else {
+        minRatio = 1 / 0.65;
+        maxRatio = Math.max(...ratios) + 0.005;
+      }
   } else {
-    minRatio = 1 / 0.65;
-    maxRatio = Math.max(...ratios) + 0.005;
+      minRatio = 0;
+      maxRatio = 1;
   }
-  const yDomain = [minRatio, maxRatio];
 
+  const yDomain = [minRatio, maxRatio];
   const currentValue = data.length > 0 ? processedGraphData[processedGraphData.length - 1].ratio.toFixed(4) : 'N/A';
 
   return (
@@ -98,13 +134,13 @@ function App() {
         SushiSwap Stake xSushi Ratio Changes
       </h1>
 
-      {balanceUsd !== null && (
+      {balanceUsd !== null && wethBalance !== null && (
         <p style={{ margin: '10px 0', fontSize: '16px', fontWeight: 'bold', color: '#94a3b8' }}>
-          Fees awaiting distribution:~ ${balanceUsd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({wethBalance.toFixed(2)} WETH)
+          Fees awaiting distribution:~ ${Number(balanceUsd).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ({Number(wethBalance).toFixed(2)} WETH)
         </p>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '15 magister 0 10px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '15px 0 10px 0' }}>
         <select
           value={selectedRatioType}
           onChange={(e) => setSelectedRatioType(e.target.value)}
