@@ -39,50 +39,57 @@ async def get_session() -> AsyncSession:
 
 balance_cache = TTLCache(maxsize=1, ttl=30)
 
-async def get_treasury_balance_usd() -> dict:  
+TREASURY_ADDRESSES = [
+    "0x5ad6211CD3fdE39A9cECB5df6f380b8263d1e277",
+    "0x1d2af2b99e253b68d72c76484dd88ffb0ace158c"
+]
+
+async def get_treasury_balance_usd() -> dict:
     if "data" in balance_cache:
         return balance_cache["data"]
 
     key = os.getenv("ETHPLORER_KEY", "freekey")
-    url = f"https://api.ethplorer.io/getAddressInfo/0x5ad6211CD3fdE39A9cECB5df6f380b8263d1e277?apiKey={key}"
 
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=15.0)
-            resp.raise_for_status()
-            data = resp.json()
+    total_usd = Decimal('0')
+    total_weth = Decimal('0')
 
-            total_usd = Decimal('0')
-            weth_balance = Decimal('0')
+    for address in TREASURY_ADDRESSES:
+        url = f"https://api.ethplorer.io/getAddressInfo/{address}?apiKey={key}"
 
-            for token in data.get("tokens", []):
-                token_info = token.get("tokenInfo", {})
-                symbol = token_info.get("symbol", "")
-                price_info = token_info.get("price")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, timeout=15.0)
+                resp.raise_for_status()
+                data = resp.json()
 
-                balance_raw = Decimal(token["balance"]) / Decimal(10) ** int(token_info.get("decimals", 18))
+                for token in data.get("tokens", []):
+                    token_info = token.get("tokenInfo", {})
+                    symbol = token_info.get("symbol", "")
+                    price_info = token_info.get("price")
 
-                if symbol == "WETH":
-                    weth_balance = balance_raw.quantize(Decimal('0.0001'))
+                    balance_raw = Decimal(token["balance"]) / Decimal(10) ** int(token_info.get("decimals", 18))
 
-                if price_info and "rate" in price_info:
-                    price = Decimal(price_info["rate"])
-                    total_usd += balance_raw * price
+                    if symbol == "WETH":
+                        total_weth += balance_raw
 
-            total_usd = total_usd.quantize(Decimal('0.01'))
+                    if price_info and "rate" in price_info:
+                        price = Decimal(price_info["rate"])
+                        total_usd += balance_raw * price
 
-            result = {
-                "balance_usd": float(total_usd),
-                "weth_balance": float(weth_balance)
-            }
+        except Exception as e:
+            logger.error(f"Ethplorer error for {address}: {e}")
 
-            balance_cache["data"] = result
-            logger.info(f"Treasury: ${total_usd} | WETH: {weth_balance}")
-            return result
+    total_usd = total_usd.quantize(Decimal('0.01'))
+    total_weth = total_weth.quantize(Decimal('0.0001'))
 
-    except Exception as e:
-        logger.error(f"Ethplorer error: {e}")
-        return {"balance_usd": 0.0, "weth_balance": 0.0}
+    result = {
+        "balance_usd": float(total_usd),
+        "weth_balance": float(total_weth)
+    }
+
+    balance_cache["data"] = result
+    logger.info(f"Treasury: ${total_usd} | WETH: {total_weth}")
+    return result
 
     
 # Fetch current xSushiSushiRatio from SushiSwap GraphQL API
@@ -232,34 +239,52 @@ async def favicon():
 # Robots.txt for SEO
 @app.get("/robots.txt")
 async def robots_txt():
-    return Response(content="""
+	return Response(content="""
 User-agent: *
 Allow: /
 Allow: /static/
+Allow: /about
 """, media_type="text/plain")
 
 # Root endpoint for React app with SSR replacement logic
+# Handles root "/" AND "/about" to support SPA routing
 @app.get("/", response_class=HTMLResponse)
+@app.get("/about", response_class=HTMLResponse)
 async def root(request: Request):
     user_agent = request.headers.get("user-agent", "").lower()
-    # List of common bots
+
+    # Extended list of bots (SEO + Social Previews)
     bots = [
-        "googlebot", "bingbot", "slurp", "duckduckbot", "baiduspider", "yandexbot", 
-        "telegrambot", "twitterbot", "linkedinbot", "whatsapp", "facebookexternalhit",
-        "discordbot", "slackbot"
+        # Search Engines
+        "googlebot", "bingbot", "yandex", "duckduckbot", "slurp",
+        "baiduspider", "sogou", "360spider", "exabot", "coccocbot",
+
+        # Social Media & Messengers (Crucial for previews)
+        "telegrambot", "twitterbot", "facebookexternalhit", "whatsapp",
+        "discordbot", "slackbot", "linkedinbot", "pinterest", "vkshare",
+        "skypeuripreview",
+
+        # AI & Tools
+        "gptbot", "perplexitybot", "anthropic-ai", "claudebot",
+        "grokaibot", "xai-retriever", "applebot",
+        "ahrefsbot", "semrushbot", "majestic", "mj12bot",
+        "screaming frog", "sitebulb", "curl", "wget", "python-requests"
     ]
-    
+
     is_bot = any(bot in user_agent for bot in bots) or "bot" in user_agent
 
     if is_bot:
-        # 1. Get Fresh Data
+        # Determine which page is requested to adjust SEO title
+        path = request.url.path
+
+        # 1. Get Fresh Data (needed for main page SEO and injection)
         ratio_data = await fetch_historical_data()
         balance_data = await get_treasury_balance_usd()
-        
+
         # Get latest values for Meta Tags
         last_ratio = ratio_data[-1]['ratio'] if ratio_data else 0
         balance_usd = balance_data.get('balance_usd', 0)
-        
+
         # Prepare JSON for Hydration
         full_initial_data = {
             "ratioData": ratio_data,
@@ -270,27 +295,37 @@ async def root(request: Request):
         try:
             with open("static/index.html", "r", encoding="utf-8") as f:
                 html_content = f.read()
-            
+
             # 2. Inject JSON Data (Server Side Injection)
             # Inserts <script> before </body>
             script_injection = f'<script>window.__INITIAL_DATA__ = {json_data};</script>'
-            
-            # 3. Update SEO Meta Tags
-            seo_title = f"Sushi Ratio: {last_ratio:.4f} | Treasury: ${balance_usd:,.0f}"
-            seo_desc = f"Current xSushi/Sushi ratio is {last_ratio:.4f}. Fees awaiting distribution: ${balance_usd:,.0f}."
-            
+
+            # 3. Update SEO Meta Tags based on Route
+            if path == "/about":
+                seo_title = "How SushiSwap Staking Works | xSushi Deep Dive"
+                seo_desc = "A comprehensive guide to SushiSwap staking mechanics, fee distribution, and the SushiMaker contract logic."
+                canonical_link = "https://xsushi.mywire.org/about"
+            else:
+                seo_title = f"Sushi Ratio: {last_ratio:.4f} | Treasury: ${balance_usd:,.0f}"
+                seo_desc = f"Current xSushi/Sushi ratio is {last_ratio:.4f}. Fees awaiting distribution: ${balance_usd:,.0f}."
+                canonical_link = "https://xsushi.mywire.org"
+
             # Replace Title
             html_content = html_content.replace("<title>xSushi Ratio</title>", f"<title>{seo_title}</title>")
-            
-            # Replace Description (ensure the string matches EXACTLY what is in your index.html)
-            original_desc = 'content="Track the xSUSHI/SUSHI staking ratio on SushiSwap over time. Monitor DeFi yields and staking metrics."'
-            html_content = html_content.replace(original_desc, f'content="{seo_desc}"')
+
+            # Replace Description
+            original_desc_prefix = 'content="Track the xSUSHI/SUSHI staking ratio on SushiSwap over time. Monitor DeFi yields and staking metrics."'
+            html_content = html_content.replace(original_desc_prefix, f'content="{seo_desc}"')
+
+            # Replace Canonical Link
+            original_canonical = '<link rel="canonical" href="https://xsushi.mywire.org">'
+            html_content = html_content.replace(original_canonical, f'<link rel="canonical" href="{canonical_link}">')
 
             # Inject Script
             final_html = html_content.replace("</body>", f"{script_injection}</body>")
-            
+
             return HTMLResponse(content=final_html)
-            
+
         except Exception as e:
             logger.error(f"Error injecting data: {e}")
             # Fallback to standard file if injection fails
