@@ -1,0 +1,22 @@
+.tooltip {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  border: 1px solid #475569;
+  border-radius: 8px;
+  padding: 12px;
+  color: #e2e8f0;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.tooltipDate {
+  margin: 0 0 8px 0;
+  font-weight: bold;
+}
+
+.tooltipRatio {
+  margin: 0;
+}
+
+.tooltipDelta {
+  margin: 4px 0 0 0;
+}

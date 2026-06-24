@@ -1,0 +1,42 @@
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base) 0%,
+    var(--skeleton-shine) 50%,
+    var(--skeleton-base) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 8px;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.chart {
+  width: 100%;
+  height: 500px;
+}
+
+.card {
+  width: 100%;
+  height: 56px;
+}
+
+:global(.recharts-wrapper),
+:global(.recharts-wrapper:focus),
+:global(.recharts-wrapper:focus-visible),
+:global(.recharts-wrapper:focus-within),
+:global(.recharts-wrapper svg),
+:global(.recharts-wrapper .recharts-surface),
+:global(.recharts-wrapper [tabindex]:focus) {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}

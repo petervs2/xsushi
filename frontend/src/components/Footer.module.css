@@ -1,0 +1,31 @@
+.footer {
+  margin-top: 10px;
+}
+
+.botLink {
+  display: block;
+  margin: 10px 0 0 0;
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.botLink:hover {
+  text-decoration: underline;
+}
+
+.srcLink {
+  display: block;
+  margin: 5px 0 0 0;
+  font-size: 14px;
+  font-weight: normal;
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.srcLink:hover {
+  text-decoration: underline;
+}

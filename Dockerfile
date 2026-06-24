@@ -5,16 +5,15 @@ WORKDIR /app/frontend
 # Create React project inside container
 RUN npx create-react-app . --template minimal
 
-# Copy custom src files (override defaults)
-COPY frontend/src/App.js src/
-COPY frontend/src/index.js src/
-COPY frontend/src/index.css src/
+# Copy custom src files (override defaults). Recursively includes utils/, hooks/,
+# components/ and App.module.css used by the refactored frontend.
+COPY frontend/src/ src/
 
 # Copy public/ for SEO and title
 COPY frontend/public/ public/
 
 # Install additional deps and build
-RUN npm install recharts date-fns
+RUN npm install recharts date-fns react-router-dom
 RUN npm run build
 
 # Stage 2: Python app

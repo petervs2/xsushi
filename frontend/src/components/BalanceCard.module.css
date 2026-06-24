@@ -1,0 +1,12 @@
+.wrapper {
+  margin: 5px 0 15px 0;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+.balance {
+  margin: 0 0 5px 0;
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--text-muted);
+}

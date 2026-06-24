@@ -1,8 +1,28 @@
+/* Design tokens — dark theme only. Consumed by every *.module.css file. */
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-hover: #243349;
+  --card-bg: #1e293b;
+  --border: #334155;
+
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+
+  --accent: #00d4ff;
+  --success: #10b981;
+  --danger: #ef4444;
+
+  /* Skeleton shimmer */
+  --skeleton-base: #1e293b;
+  --skeleton-shine: #334155;
+}
+
 body {
   margin: 0;
   padding: 0;
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background-color: var(--bg);
+  color: var(--text);
   font-family: system-ui, -apple-system, sans-serif;
 }
 
@@ -11,6 +31,7 @@ body {
   box-sizing: border-box;
 }
 
+/* Remove the default focus ring Recharts adds to the chart wrapper. */
 .recharts-wrapper,
 .recharts-wrapper:focus,
 .recharts-wrapper:focus-visible,
@@ -23,35 +44,27 @@ body {
   border: none !important;
 }
 
+/* Keep a visible focus indicator for keyboard users on the chart. */
+.recharts-wrapper:focus-visible svg,
+.recharts-wrapper:focus-visible .recharts-surface {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 a:hover {
   text-decoration: underline;
 }
 
-.recharts-wrapper:focus-visible svg,
-.recharts-wrapper:focus-visible .recharts-surface {
-  outline: 2px solid #00d4ff;
-  outline-offset: 2px;
-}
-
 @media (max-width: 768px) {
-  div[style*="padding"] {
-    padding: 10px 5px;
-  }
-  
   h1 {
     font-size: 20px;
   }
-  
+
   .recharts-responsive-container {
     height: 500px !important;
   }
-  
+
   .recharts-x-axis-ticks text {
     font-size: 8px !important;
-  }
-  
-  a[style*="margin: '10px 0 0 0'"] {
-    margin-left: 5px;
-    font-size: 16px;
   }
 }
