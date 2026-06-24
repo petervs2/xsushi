@@ -1,0 +1,25 @@
+# Environment files (secrets — never commit)
+config/.env
+
+# Node / React
+node_modules/
+frontend/node_modules/
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
