@@ -105,25 +105,26 @@ export function buildChartData(processedData, days, ratioType) {
     // across the whole window. The user sees "nothing changed here".
     const fromTs = cutoff;
     const ratio = lastRealRatio;
-    rows = [
-      recomputeDeltas([
-        {
-          timestamp: fromTs,
-          ratio,
-          originalRatio: lastRealOriginal,
-          isReal: false,
-          isSynthetic: true,
-        },
-        {
-          timestamp: now,
-          ratio,
-          originalRatio: lastRealOriginal,
-          isReal: false,
-          isSynthetic: true,
-          isNow: true,
-        },
-      ]),
-    ][0];
+    // Both points are part of the dashed "awaiting distribution" tail.
+    // The start point is marked isBridge so the dashed line picks it up.
+    rows = recomputeDeltas([
+      {
+        timestamp: fromTs,
+        ratio,
+        originalRatio: lastRealOriginal,
+        isReal: false,
+        isSynthetic: true,
+        isBridge: true,
+      },
+      {
+        timestamp: now,
+        ratio,
+        originalRatio: lastRealOriginal,
+        isReal: false,
+        isSynthetic: true,
+        isNow: true,
+      },
+    ]);
   } else {
     // Real points within the period. Convert to the display ratio view.
     const real = realInPeriod.map((p) => ({
