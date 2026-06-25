@@ -71,7 +71,7 @@ const ChartTooltip = ({ active, payload, label, ratioType }) => {
  *
  * Memoized: re-renders only when graphData or ratioType identity changes.
  */
-function RatioChart({ graphData, ratioType }) {
+function RatioChart({ graphData, ratioType, brushRange, onBrushChange }) {
   const ratios = graphData.map((d) => d.ratio);
   const yDomain = computeYDomain(ratios, ratioType);
 
@@ -81,6 +81,14 @@ function RatioChart({ graphData, ratioType }) {
 
   // Locate the "now" point for the ReferenceDot marker.
   const nowPoint = graphData.find((d) => d.isNow);
+
+  // Brush is controlled: startIndex/endIndex are owned by the parent so the
+  // visible window drives the Change card + Period card. When the data changes
+  // (period switch), the parent resets brushRange to the full range.
+  const handleBrushChange = (payload) => {
+    if (!payload || payload.startIndex == null || payload.endIndex == null) return;
+    onBrushChange?.({ startIndex: payload.startIndex, endIndex: payload.endIndex });
+  };
 
   // Animation duration — longer for more data points (capped).
   const animDuration = Math.min(600 + graphData.length * 15, 1500);
@@ -180,6 +188,9 @@ function RatioChart({ graphData, ratioType }) {
           fill="#1e293b"
           tickFormatter={tickFormatter}
           tick={{ fill: '#94a3b8', fontSize: '10px' }}
+          startIndex={brushRange?.startIndex}
+          endIndex={brushRange?.endIndex}
+          onChange={handleBrushChange}
         />
       </LineChart>
     </ResponsiveContainer>

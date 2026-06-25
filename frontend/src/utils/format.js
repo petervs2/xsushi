@@ -8,6 +8,12 @@ export function formatDateTime(ts) {
   return format(new Date(ts), 'MMM dd, yyyy HH:mm');
 }
 
+/** Format a numeric timestamp as dd.MM.yyyy (e.g. "24.06.2026"). */
+export function formatDateDMY(ts) {
+  if (ts == null) return '';
+  return format(new Date(ts), 'dd.MM.yyyy');
+}
+
 /** Ratio values are displayed to 4 decimal places. */
 export function formatRatio(value) {
   return Number(value).toFixed(4);

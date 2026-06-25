@@ -178,6 +178,36 @@ export function buildChartData(processedData, days, ratioType) {
 }
 
 /**
+ * Compute the percent change across a sub-range of chart points, identified by
+ * start/end indices (as exposed by the Brush's startIndex/endIndex).
+ *
+ * The change is measured between the first and last *real* (non-synthetic)
+ * points that fall inside [startIndex, endIndex]. Synthetic bridge/now points
+ * carry no new information, so they are skipped when picking endpoints.
+ *
+ * Returns 0 when fewer than two real points are visible.
+ *
+ * @param {Array} points  chart rows (output of withSplitKeys)
+ * @param {number} startIndex
+ * @param {number} endIndex
+ * @returns {number}
+ */
+export function computeVisibleChange(points, startIndex, endIndex) {
+  if (!points.length || startIndex == null || endIndex == null) return 0;
+  const lo = Math.max(0, Math.min(startIndex, endIndex));
+  const hi = Math.min(points.length - 1, Math.max(startIndex, endIndex));
+  if (hi <= lo) return 0;
+
+  // Real (measured) points inside the visible window, in display-ratio terms.
+  const real = points.slice(lo, hi + 1).filter((p) => p.isReal);
+  if (real.length < 2) return 0;
+
+  const first = real[0].ratio;
+  const last = real[real.length - 1].ratio;
+  return first !== 0 ? ((last - first) / first) * 100 : 0;
+}
+
+/**
  * Post-process chart rows for rendering: add `solidRatio` and `dashedRatio`
  * data-key fields so each <Line> in the chart reads from the *same* dataset
  * that <LineChart> and <Brush> share (no per-Line `data` prop — that breaks
