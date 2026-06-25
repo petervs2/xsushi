@@ -242,6 +242,11 @@ export function computeYDomain(ratios, ratioType) {
 /**
  * Generate strict calendar tick positions (1st of each month, or Jan 1st
  * yearly if the range is > 2 years). Returns numeric timestamps.
+ *
+ * Ticks are constrained to the data's [min, max] window: a tick falling outside
+ * the visible range (e.g. the 1st of the month after a mid-month right edge)
+ * would otherwise force the axis to extend past the data, pinning the right edge
+ * to a date the user didn't select.
  */
 export function generateCalendarTicks(data) {
   if (!data || data.length < 2) return undefined;
@@ -257,7 +262,8 @@ export function generateCalendarTicks(data) {
       ? eachYearOfInterval({ start, end })
       : eachMonthOfInterval({ start, end });
 
-  return dates.map((t) => t.getTime());
+  // Keep only ticks that fall within the actual data window.
+  return dates.map((t) => t.getTime()).filter((t) => t >= minTime && t <= maxTime);
 }
 
 /**

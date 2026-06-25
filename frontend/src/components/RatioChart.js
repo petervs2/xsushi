@@ -75,9 +75,29 @@ function RatioChart({ graphData, ratioType, brushRange, onBrushChange }) {
   const ratios = graphData.map((d) => d.ratio);
   const yDomain = computeYDomain(ratios, ratioType);
 
-  // Calendar ticks (1st of each month / Jan 1st yearly) + matching formatter.
-  const axisTicks = useMemo(() => generateCalendarTicks(graphData), [graphData]);
-  const tickFormatter = useMemo(() => getTickFormatter(graphData), [graphData]);
+  // Resolve the visible slice from the brush selection (default: full range).
+  // The X-axis ticks, formatter and domain are all derived from this window so
+  // the axis edges track the brush instead of staying pinned to "now" (the last
+  // point of the full dataset).
+  const visible = useMemo(() => {
+    if (!graphData.length) return [];
+    const lo = brushRange
+      ? Math.max(0, Math.min(brushRange.startIndex, brushRange.endIndex))
+      : 0;
+    const hi = brushRange
+      ? Math.min(graphData.length - 1, Math.max(brushRange.startIndex, brushRange.endIndex))
+      : graphData.length - 1;
+    return graphData.slice(lo, hi + 1);
+  }, [graphData, brushRange]);
+
+  // Calendar ticks (1st of each month / Jan 1st yearly) + matching formatter,
+  // computed from the VISIBLE window.
+  const axisTicks = useMemo(() => generateCalendarTicks(visible), [visible]);
+  const tickFormatter = useMemo(() => getTickFormatter(visible), [visible]);
+  const xDomain = useMemo(() => {
+    if (!visible.length) return ['dataMin', 'dataMax'];
+    return [visible[0].timestamp, visible[visible.length - 1].timestamp];
+  }, [visible]);
 
   // Locate the "now" point for the ReferenceDot marker.
   const nowPoint = graphData.find((d) => d.isNow);
@@ -101,7 +121,7 @@ function RatioChart({ graphData, ratioType, brushRange, onBrushChange }) {
           dataKey="timestamp"
           type="number"
           scale="time"
-          domain={['dataMin', 'dataMax']}
+          domain={xDomain}
           ticks={axisTicks}
           tickFormatter={tickFormatter}
           height={50}
