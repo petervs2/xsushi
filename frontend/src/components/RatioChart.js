@@ -58,18 +58,16 @@ const ChartTooltip = ({ active, payload, label, ratioType }) => {
  * Visual design:
  *  - `stepAfter` line type: correctly shows the step nature of distributions
  *    (value stays constant between distributions, then jumps).
- *  - Two <Line> elements share the same <LineChart data>:
- *    1) Solid line — passes `data` as graphData where bridge/now points have
- *       `ratio: null`. connectNulls bridges the gap so the last real step is
- *       drawn, but the tail portion has no values → no solid line there.
- *    2) Dashed line — passes `data` as graphData where only bridge/now points
- *       have values. connectNulls draws a horizontal dashed step to "now".
+ *  - Two <Line> elements read from the **same** <LineChart data> (no per-Line
+ *    `data` prop — that breaks Brush index-based filtering):
+ *    1) Solid line — dataKey="solidRatio" (null for bridge/now rows).
+ *    2) Dashed line — dataKey="dashedRatio" (null for everything else).
+ *    Both use connectNulls to skip gaps.
  *  - A ReferenceDot with "Now" label marks the end of the dashed tail.
  *  - Animation draws the solid line from left to right on mount / period change.
  *
- * `graphData` is built by `buildChartData()` and contains `isNow` / `isBridge`
- * flags on each point. The bridge point overlaps the last real point so the
- * dashed tail starts horizontally (doesn't re-draw the step).
+ * `graphData` is built by `buildChartData()` + `withSplitKeys()` and contains
+ * `isNow` / `isBridge` flags plus `solidRatio` / `dashedRatio` data keys.
  *
  * Memoized: re-renders only when graphData or ratioType identity changes.
  */
@@ -83,21 +81,6 @@ function RatioChart({ graphData, ratioType }) {
 
   // Locate the "now" point for the ReferenceDot marker.
   const nowPoint = graphData.find((d) => d.isNow);
-
-  // Two separate data arrays for the two <Line> components:
-  // - solidData: same as graphData, but bridge/now rows have ratio=null.
-  //   connectNulls will draw the solid step line through real points, then
-  //   a straight connector across the null gap to any trailing real point.
-  //   Because the bridge is at the same X as the last real point, that
-  //   connector is zero-length (invisible).
-  // - dashedData: same as graphData, but only bridge/now rows have values.
-  //   connectNulls draws the dashed horizontal step to "now".
-  const solidData = graphData.map((d) =>
-    d.isBridge || d.isNow ? { ...d, ratio: null } : d,
-  );
-  const dashedData = graphData.map((d) =>
-    !d.isBridge && !d.isNow ? { ...d, ratio: null } : d,
-  );
 
   // Animation duration — longer for more data points (capped).
   const animDuration = Math.min(600 + graphData.length * 15, 1500);
@@ -125,17 +108,18 @@ function RatioChart({ graphData, ratioType }) {
         />
         <Tooltip content={<ChartTooltip ratioType={ratioType} />} />
 
-        {/* Solid step line — real distribution history */}
+        {/* Solid step line — real distribution history. Reads solidRatio
+            which is null for bridge/now rows, so connectNulls draws the
+            step through real points and stops at the last real step. */}
         <Line
-          data={solidData}
           type="stepAfter"
-          dataKey="ratio"
+          dataKey="solidRatio"
           stroke="#00d4ff"
           strokeWidth={2.5}
           connectNulls
           dot={(props) => {
             const { cx, cy, index, payload } = props;
-            if (payload.ratio == null || payload.isSynthetic) {
+            if (payload.solidRatio == null || payload.isSynthetic) {
               return <g key={`skip-${index}`} />;
             }
             return (
@@ -155,11 +139,11 @@ function RatioChart({ graphData, ratioType }) {
           animationDuration={animDuration}
         />
 
-        {/* Dashed tail — from last real distribution to "now" */}
+        {/* Dashed tail — from last real distribution to "now". Reads
+            dashedRatio which is only non-null for bridge/now rows. */}
         <Line
-          data={dashedData}
           type="stepAfter"
-          dataKey="ratio"
+          dataKey="dashedRatio"
           stroke="#00d4ff"
           strokeWidth={2}
           strokeDasharray="8 5"

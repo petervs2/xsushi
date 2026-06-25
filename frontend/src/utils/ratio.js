@@ -178,6 +178,23 @@ export function buildChartData(processedData, days, ratioType) {
 }
 
 /**
+ * Post-process chart rows for rendering: add `solidRatio` and `dashedRatio`
+ * data-key fields so each <Line> in the chart reads from the *same* dataset
+ * that <LineChart> and <Brush> share (no per-Line `data` prop — that breaks
+ * Brush index-based filtering).
+ *
+ *  - solidRatio: null for bridge/now rows, ratio otherwise.
+ *  - dashedRatio: null for everything except bridge/now rows.
+ */
+export function withSplitKeys(rows) {
+  return rows.map((d) => ({
+    ...d,
+    solidRatio: d.isBridge || d.isNow ? null : d.ratio,
+    dashedRatio: d.isBridge || d.isNow ? d.ratio : null,
+  }));
+}
+
+/**
  * Y-axis domain for the chart, matching the original fixed-cap behaviour.
  */
 export function computeYDomain(ratios, ratioType) {

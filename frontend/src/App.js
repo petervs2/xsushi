@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { RATIO_TYPES, DEFAULT_PERIOD, PERIODS } from './constants';
 import { useRatioData } from './hooks/useRatioData';
 import { useBalance } from './hooks/useBalance';
-import { buildChartData } from './utils/ratio';
+import { buildChartData, withSplitKeys } from './utils/ratio';
 import { formatRatio } from './utils/format';
 import Header from './components/Header';
 import BalanceCard from './components/BalanceCard';
@@ -28,7 +28,7 @@ function App() {
     const periodDays = PERIODS.find((p) => p.id === selectedPeriod)?.days ?? null;
     const built = buildChartData(data, periodDays, selectedRatioType);
     return {
-      graphData: built.points,
+      graphData: withSplitKeys(built.points),
       stats: { changePct: built.changePct },
       noDistribution: built.noDistribution,
       currentValue:
