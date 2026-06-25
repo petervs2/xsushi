@@ -10,23 +10,24 @@ import {
 } from 'date-fns';
 import { RATIO_TYPES, RATIO_UPPER_BOUND, RATIO_AXIS_PADDING } from '../constants';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Enrich raw API points. Converts ISO timestamp to numeric ms (for recharts
- * time-based XAxis) and computes the percent delta vs the previous point.
+ * Enrich raw API points: convert ISO timestamp to numeric ms (for recharts
+ * time-based XAxis) and keep the canonical Sushi/xSushi ratio as `originalRatio`.
+ *
+ * `deltaPercent` is left to buildChartData(), which needs the display-domain
+ * delta after the selected ratio type (and synthetic "now" points) are applied.
  *
  * @param {Array<{timestamp: string, ratio: number}>} rawData
- * @returns {Array<{timestamp: number, ratio: number, originalRatio: number, deltaPercent: number|null}>}
+ * @returns {Array<{timestamp: number, ratio: number, originalRatio: number}>}
  */
 export function processRawData(rawData) {
   if (!rawData) return [];
-  return rawData.map((point, index) => ({
+  return rawData.map((point) => ({
     ...point,
     timestamp: new Date(point.timestamp).getTime(),
     originalRatio: point.ratio,
-    deltaPercent:
-      index > 0
-        ? ((point.ratio - rawData[index - 1].ratio) / rawData[index - 1].ratio) * 100
-        : null,
   }));
 }
 
@@ -41,32 +42,138 @@ export function toDisplayRatio(originalRatio, ratioType) {
 }
 
 /**
- * Compute the percent delta for a point in the *display* (possibly inverted)
- * domain, relative to the previous point.
+ * Recompute deltaPercent relative to the previous row of an array of
+ * display rows (used after synthetic points are appended).
  */
-export function displayDeltaPercent(originalRatio, prevOriginalRatio) {
-  if (originalRatio === undefined || prevOriginalRatio === undefined) return null;
-  const cur = 1 / originalRatio;
-  const prev = 1 / prevOriginalRatio;
-  return ((cur - prev) / prev) * 100;
+function recomputeDeltas(rows) {
+  return rows.map((row, index) => {
+    if (index === 0) return { ...row, deltaPercent: null };
+    const prev = rows[index - 1];
+    if (row.ratio == null || prev.ratio == null) return { ...row, deltaPercent: null };
+    return { ...row, deltaPercent: ((row.ratio - prev.ratio) / prev.ratio) * 100 };
+  });
 }
 
 /**
- * Map processed points into chart-ready rows for the given ratio type.
- * Recomputes `ratio` and `deltaPercent` for the selected view.
+ * Build the full chart dataset for a given period and ratio type.
+ *
+ * The backend stores a point only when a distribution changes the ratio, so the
+ * data is naturally step-shaped: between points the value is constant. This
+ * function turns that into a chart that always reaches "now" and is honest about
+ * which part of the line is a real observation vs. a value still awaiting the
+ * next distribution.
+ *
+ * Responsibilities:
+ *  - filter to the selected period (`days: null` = all history)
+ *  - when the period has no real points, synthesize a flat segment using the
+ *    last known value, so the chart still draws as a straight line
+ *  - always extend the line to the current time with a trailing segment marked
+ *    `isNow: true` (rendered dashed). A duplicate "bridge" point is injected so
+ *    the dashed tail does not visually re-draw the last real step.
+ *
+ * Returns: {
+ *   points: Array<row>,            // chart rows (display ratios, deltas, flags)
+ *   noDistribution: boolean,       // no real distribution fell inside the period
+ *   hasRealPoints: boolean,
+ *   lastRealRatio: number | null,  // last real display ratio (== current value)
+ *   changePct: number,             // total change across the window (>=0 floor)
+ * }
  */
-export function toGraphData(processedData, ratioType) {
-  return processedData.map((point, index) => {
-    const prevOriginal = index > 0 ? processedData[index - 1].originalRatio : undefined;
-    return {
-      ...point,
-      ratio: toDisplayRatio(point.originalRatio, ratioType),
-      deltaPercent:
-        ratioType === RATIO_TYPES.SUSHI_XSUSHI
-          ? point.deltaPercent
-          : displayDeltaPercent(point.originalRatio, prevOriginal),
-    };
-  });
+export function buildChartData(processedData, days, ratioType) {
+  const now = Date.now();
+
+  // --- 1. period filter ----------------------------------------------------
+  const cutoff = days ? now - days * DAY_MS : null;
+  const realInPeriod = cutoff
+    ? processedData.filter((p) => p.timestamp >= cutoff)
+    : processedData.slice();
+
+  const hasRealPoints = realInPeriod.length > 0;
+
+  // Last known value across the ENTIRE dataset (constant for the whole dataset
+  // lifetime, independent of the selected period).
+  const lastRealOriginal = processedData.length
+    ? processedData[processedData.length - 1].originalRatio
+    : null;
+  const lastRealRatio =
+    lastRealOriginal != null ? toDisplayRatio(lastRealOriginal, ratioType) : null;
+
+  let rows;
+
+  if (!hasRealPoints) {
+    // No distribution in this period → draw a flat line at the last known value
+    // across the whole window. The user sees "nothing changed here".
+    const fromTs = cutoff;
+    const ratio = lastRealRatio;
+    rows = [
+      recomputeDeltas([
+        {
+          timestamp: fromTs,
+          ratio,
+          originalRatio: lastRealOriginal,
+          isReal: false,
+          isSynthetic: true,
+        },
+        {
+          timestamp: now,
+          ratio,
+          originalRatio: lastRealOriginal,
+          isReal: false,
+          isSynthetic: true,
+          isNow: true,
+        },
+      ]),
+    ][0];
+  } else {
+    // Real points within the period. Convert to the display ratio view.
+    const real = realInPeriod.map((p) => ({
+      ...p,
+      ratio: toDisplayRatio(p.originalRatio, ratioType),
+      isReal: true,
+    }));
+
+    // Extend to "now": the value stays at the last real ratio until the next
+    // distribution. A bridge point duplicates the last real value so the dashed
+    // tail starts horizontally (and the last real step isn't redrawn dashed).
+    const tail = [];
+    if (lastRealRatio != null) {
+      tail.push({
+        timestamp: real[real.length - 1].timestamp,
+        ratio: lastRealRatio,
+        originalRatio: lastRealOriginal,
+        isReal: false,
+        isBridge: true,
+      });
+      tail.push({
+        timestamp: now,
+        ratio: lastRealRatio,
+        originalRatio: lastRealOriginal,
+        isReal: false,
+        isNow: true,
+      });
+    }
+    rows = recomputeDeltas([...real, ...tail]);
+  }
+
+  // --- total change across the window --------------------------------------
+  const realRatios = rows.filter((r) => r.isReal).map((r) => r.ratio);
+  let changePct;
+  if (realRatios.length >= 2) {
+    const first = realRatios[0];
+    const last = realRatios[realRatios.length - 1];
+    changePct = first !== 0 ? ((last - first) / first) * 100 : 0;
+  } else {
+    // 0 or 1 real point in the window → no observable change.
+    changePct = 0;
+  }
+
+  return {
+    points: rows,
+    noDistribution: !hasRealPoints,
+    hasRealPoints,
+    lastRealRatio,
+    changePct,
+  };
 }
 
 /**
@@ -78,34 +185,6 @@ export function computeYDomain(ratios, ratioType) {
     return [Math.min(...ratios) - RATIO_AXIS_PADDING, RATIO_UPPER_BOUND];
   }
   return [1 / RATIO_UPPER_BOUND, Math.max(...ratios) + RATIO_AXIS_PADDING];
-}
-
-/**
- * Filter processed points to the last `days` days. `days: null` keeps everything.
- * Timestamps are numeric (ms), matching the time-based XAxis.
- */
-export function applyPeriodFilter(processedData, days) {
-  if (!days) return processedData;
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return processedData.filter((point) => point.timestamp >= cutoff);
-}
-
-/**
- * Statistics over a set of graph points for the selected view.
- * Returns min/max/average display ratios and the total change % across the window.
- */
-export function computeStats(graphPoints) {
-  if (!graphPoints.length) {
-    return { min: null, max: null, avg: null, changePct: null };
-  }
-  const values = graphPoints.map((p) => p.ratio);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
-  const first = graphPoints[0].ratio;
-  const last = graphPoints[graphPoints.length - 1].ratio;
-  const changePct = first !== 0 ? ((last - first) / first) * 100 : null;
-  return { min, max, avg, changePct };
 }
 
 // ---------------------------------------------------------------------------

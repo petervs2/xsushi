@@ -17,7 +17,7 @@ export default function PeriodStats({ stats, ratioType, currentValue, noDistribu
         ? styles.down
         : styles.neutral;
   const changeDisplay = noDistribution
-    ? '—'
+    ? '0.00%'
     : formatChangePct(
         stats.changePct !== null ? stats.changePct.toFixed(2) : null
       );

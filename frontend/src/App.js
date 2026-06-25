@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { RATIO_TYPES, DEFAULT_PERIOD, PERIODS } from './constants';
 import { useRatioData } from './hooks/useRatioData';
 import { useBalance } from './hooks/useBalance';
-import { toGraphData, applyPeriodFilter, computeStats } from './utils/ratio';
+import { buildChartData } from './utils/ratio';
 import { formatRatio } from './utils/format';
 import Header from './components/Header';
 import BalanceCard from './components/BalanceCard';
@@ -21,25 +21,18 @@ function App() {
   const [selectedRatioType, setSelectedRatioType] = useState(RATIO_TYPES.XSUSHI_SUSHI);
   const [selectedPeriod, setSelectedPeriod] = useState(DEFAULT_PERIOD);
 
-  // Full (unfiltered) graph for the "Current value" — always shown.
-  const fullGraph = useMemo(
-    () => toGraphData(data, selectedRatioType),
-    [data, selectedRatioType],
-  );
-  const currentValue =
-    fullGraph.length > 0
-      ? formatRatio(fullGraph[fullGraph.length - 1].ratio)
-      : 'N/A';
-
-  // Period-filtered data for the chart, stats, and distribution detection.
-  const { graphData, stats, noDistribution } = useMemo(() => {
+  // Build the chart dataset for the selected period + ratio type. This handles
+  // period filtering, extends the line to "now", and reports whether any real
+  // distribution fell inside the window.
+  const { graphData, stats, noDistribution, currentValue } = useMemo(() => {
     const periodDays = PERIODS.find((p) => p.id === selectedPeriod)?.days ?? null;
-    const filtered = applyPeriodFilter(data, periodDays);
-    const graph = toGraphData(filtered, selectedRatioType);
+    const built = buildChartData(data, periodDays, selectedRatioType);
     return {
-      graphData: graph,
-      stats: computeStats(graph),
-      noDistribution: data.length > 0 && graph.length === 0,
+      graphData: built.points,
+      stats: { changePct: built.changePct },
+      noDistribution: built.noDistribution,
+      currentValue:
+        built.lastRealRatio != null ? formatRatio(built.lastRealRatio) : 'N/A',
     };
   }, [data, selectedRatioType, selectedPeriod]);
 
@@ -84,14 +77,8 @@ function App() {
             noDistribution={noDistribution}
           />
 
-          {!noDistribution && graphData.length > 0 && (
+          {graphData.length > 0 && (
             <RatioChart graphData={graphData} ratioType={selectedRatioType} />
-          )}
-
-          {noDistribution && (
-            <p className={styles.emptyPeriod}>
-              No distributions were made in this period.
-            </p>
           )}
         </>
       )}
