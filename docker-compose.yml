@@ -7,12 +7,8 @@ services:
     init: true
     env_file:
       - config/.env
-    networks:
-      - pool_info_app-network
     ports:
       - "127.0.0.1:8001:8001"
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
-
-networks:
-  pool_info_app-network:
-    external: true

@@ -1,12 +1,15 @@
 import os
 import json
 import asyncio
+import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, Response, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
+from sqlalchemy import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.sql import text
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,20 +25,47 @@ from cachetools import TTLCache
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get DATABASE_URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    # Fallback for local testing if needed, or raise error
-    raise ValueError("DATABASE_URL not set")
+# SQLite stores Decimals as text so they round-trip exactly (like Postgres NUMERIC)
+sqlite3.register_adapter(Decimal, str)
+
+# Get DATABASE_URL from environment (defaults to a local SQLite file)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/xsushi.db")
 
 # FastAPI application instance
 app = FastAPI(title="XSushi Ratio Tracker")
 
 # Database engine and session generator
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"timeout": 30})
 async def get_session() -> AsyncSession:
     async with AsyncSession(engine) as session:
         yield session
+
+SCHEMA_STATEMENTS = [
+    "CREATE TABLE IF NOT EXISTS xsushi (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, ratio TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_xsushi_timestamp ON xsushi (timestamp DESC)",
+    "CREATE TABLE IF NOT EXISTS subscribers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER UNIQUE NOT NULL, subscribed_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_subscribers_user_id ON subscribers (user_id)",
+]
+
+async def init_db():
+    """Create the SQLite database file + tables on startup."""
+    db_path = make_url(DATABASE_URL).database
+    if db_path and db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    async with engine.begin() as conn:
+        for stmt in SCHEMA_STATEMENTS:
+            await conn.execute(text(stmt))
+
+def now_iso() -> str:
+    """Current UTC time as a sortable ISO-8601 string (second precision, +00:00)."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+def parse_ts(value):
+    """Convert an SQLite timestamp (TEXT ISO) back into a timezone-aware datetime."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 balance_cache = TTLCache(maxsize=1, ttl=30)
 
@@ -126,7 +156,8 @@ async def check_and_save(to_check_only: bool = False):
         
         if last_ratio is None or abs(new_ratio - last_ratio) >= Decimal('0.0001'):
             # Check if there's a record for today
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(timezone.utc).date().isoformat()
+            now = now_iso()
             today_result = await session.execute(
                 text("SELECT id FROM xsushi WHERE date(timestamp) = :today"),
                 {"today": today}
@@ -136,15 +167,15 @@ async def check_and_save(to_check_only: bool = False):
             if today_exists:
                 # Update today's record
                 await session.execute(
-                    text("UPDATE xsushi SET ratio = :ratio, timestamp = NOW() WHERE date(timestamp) = :today"),
-                    {"ratio": new_ratio, "today": today}
+                    text("UPDATE xsushi SET ratio = :ratio, timestamp = :now WHERE date(timestamp) = :today"),
+                    {"ratio": new_ratio, "now": now, "today": today}
                 )
                 logger.info(f"Updated today's ratio: {new_ratio}")
             else:
                 # Insert new record for today
                 await session.execute(
-                    text("INSERT INTO xsushi (timestamp, ratio) VALUES (NOW(), :ratio)"),
-                    {"ratio": new_ratio}
+                    text("INSERT INTO xsushi (timestamp, ratio) VALUES (:now, :ratio)"),
+                    {"now": now, "ratio": new_ratio}
                 )
                 logger.info(f"Inserted new ratio for today: {new_ratio}")
             
@@ -182,6 +213,7 @@ scheduler = AsyncIOScheduler()
 # Startup event: initialize scheduler, run initial check, start bot polling
 @app.on_event("startup")
 async def startup_event():
+    await init_db()  # Ensure SQLite file + tables exist
     scheduler.add_job(check_and_save, 'cron', hour='*', minute=0, id='hourly_check', replace_existing=True)
     scheduler.start()
     await check_and_save(to_check_only=True)  # Initial check without notifications
@@ -201,17 +233,17 @@ async def fetch_historical_data(from_date: Optional[str] = None, to_date: Option
     params = {}
     if isinstance(from_date, str) and from_date:
         query += " AND timestamp >= :from_date"
-        params['from_date'] = datetime.fromisoformat(f"{from_date}T00:00:00+00:00")
+        params['from_date'] = datetime.fromisoformat(f"{from_date}T00:00:00+00:00").isoformat()
     if isinstance(to_date, str) and to_date:
         query += " AND timestamp <= :to_date"
-        params['to_date'] = datetime.fromisoformat(f"{to_date}T23:59:59+00:00")
+        params['to_date'] = datetime.fromisoformat(f"{to_date}T23:59:59+00:00").isoformat()
     query += " ORDER BY timestamp ASC"
 
     async for session in get_session():
         result = await session.execute(text(query), params)
         rows = result.fetchall()
         return [
-            {"timestamp": row[0].isoformat(), "ratio": float(row[1])}
+            {"timestamp": row[0], "ratio": float(row[1])}
             for row in rows
         ]
 
@@ -351,8 +383,8 @@ async def start_handler(message: types.Message):
     async for session in get_session():
         # Add subscriber if not exists
         await session.execute(
-            text("INSERT INTO subscribers (user_id) VALUES (:user_id) ON CONFLICT (user_id) DO NOTHING"),
-            {"user_id": user_id}
+            text("INSERT INTO subscribers (user_id, subscribed_at) VALUES (:user_id, :now) ON CONFLICT (user_id) DO NOTHING"),
+            {"user_id": user_id, "now": now_iso()}
         )
         await session.commit()
     
@@ -366,7 +398,7 @@ async def start_handler(message: types.Message):
         if rows:
             last_ratio = Decimal(str(rows[0][0]))
             prev_ratio = Decimal(str(rows[1][0])) if len(rows) > 1 else last_ratio
-            last_timestamp = rows[0][1]
+            last_timestamp = parse_ts(rows[0][1])
             xsushi_sushi = (1 / last_ratio).quantize(Decimal('0.0001'))
             sushi_xsushi = last_ratio
             change_percent = abs((last_ratio - prev_ratio) / prev_ratio * 100).quantize(Decimal('0.01')) if len(rows) > 1 else Decimal('0.00')

@@ -14,6 +14,10 @@ __pycache__/
 .venv/
 venv/
 
+# Database file (keep .gitkeep)
+data/*
+!data/.gitkeep
+
 # OS
 .DS_Store
 Thumbs.db

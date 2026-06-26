@@ -51,7 +51,7 @@ A simple web app to track the **xSUSHI/SUSHI staking ratio** on SushiSwap over t
 | **Backend** | FastAPI (Python), APScheduler (hourly checks), aiogram (Telegram bot) |
 | **Frontend** | React (CRA), Recharts, react-router-dom, date-fns |
 | **Frontend architecture** | Component-based: `Header`, `BalanceCard`, `WethProgressBar`, `RatioSelector`, `PeriodStats`, `RatioChart`, `Skeleton`, `Footer`, `About`. Custom hooks (`useRatioData`, `useBalance`). CSS Modules + design tokens. |
-| **Database** | PostgreSQL |
+| **Database** | SQLite (single file — zero-config, no external server) |
 | **Deployment** | Docker Compose |
 
 ---
@@ -59,31 +59,31 @@ A simple web app to track the **xSUSHI/SUSHI staking ratio** on SushiSwap over t
 ## Prerequisites
 
 - Docker and Docker Compose.
-- PostgreSQL database (version 16+ recommended).
 - Telegram bot token (create via [@BotFather](https://t.me/BotFather)).
 
 ---
 
 ## Database Setup
 
-The app requires a PostgreSQL database named `sushi_db` with user `pool_user`. Create the following tables:
+The app uses **SQLite** — no external database server required. Tables are
+automatically created at startup by the application itself (`init_db()` in
+`main.py`). The database file lives at `data/xsushi.db` and is bind-mounted
+as `/app/data` in Docker Compose so it persists outside the container.
 
-### `xsushi` Table (ratio data)
+**Schema (auto-created):**
+
 ```sql
 CREATE TABLE IF NOT EXISTS xsushi (
-    id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    ratio NUMERIC(10,4) NOT NULL
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    ratio     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_xsushi_timestamp ON xsushi (timestamp DESC);
-```
 
-### `subscribers` Table (Telegram bot users)
-```sql
 CREATE TABLE IF NOT EXISTS subscribers (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT UNIQUE NOT NULL,
-    subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER UNIQUE NOT NULL,
+    subscribed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_subscribers_user_id ON subscribers (user_id);
 ```
@@ -102,7 +102,7 @@ cd xsushi
 
 Create `config/.env` with:
 ```
-DATABASE_URL=your_postgres_connection_string
+DATABASE_URL=sqlite+aiosqlite:///./data/xsushi.db
 BOT_TOKEN=your_telegram_bot_token
 ```
 
@@ -139,7 +139,7 @@ Access the app at [http://localhost:8001](http://localhost:8001) (or your domain
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | ✅ | PostgreSQL connection string |
+| `DATABASE_URL` | ✅ | SQLite file path (e.g. `sqlite+aiosqlite:///./data/xsushi.db`) |
 | `BOT_TOKEN` | ✅ | Telegram bot token (required for bot functionality) |
 
 ---
